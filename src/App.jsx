@@ -33,7 +33,8 @@ export default function App() {
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [chartPoints, setChartPoints] = useState([])
-  const [lastUpdated, setLastUpdated] = useState('')
+const [lastUpdated, setLastUpdated] = useState('')
+const [trades, setTrades] = useState([])
 
   const provider = new ethers.JsonRpcProvider(
     NETWORK.rpcUrls[0],
