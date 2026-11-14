@@ -27,7 +27,7 @@ export const ABI = [
   'function buy(address,uint256) payable',
   'function sell(address,uint256,uint256) payable',
   'function quoteBuy(address,uint256) view returns (uint256)',
-  'function quoteSell(address,uint256) view returns (uint256)'
+  'function quoteSell(address,uint256) view returns (uint256)',
 ]
 
 export async function connectWallet() {
