@@ -5,7 +5,7 @@ export const CONTRACT_ADDRESS =
   '0x0937b4E75bE867718EaE1Bd8F7a9ADaa2a7c2926'
 
 export const NETWORK = {
-  chainId: '0x1652e',
+  chainId: '0x164ce',
   chainName: 'GIWA Sepolia',
   nativeCurrency: {
     name: 'ETH',
