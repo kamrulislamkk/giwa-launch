@@ -16,6 +16,7 @@ const sections = [
 const tokenABI = [
   'function name() view returns (string)',
   'function symbol() view returns (string)',
+  'function totalSupply() view returns (uint256)',
   'function approve(address,uint256) returns (bool)'
 ]
 
@@ -31,6 +32,8 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const [chartPoints, setChartPoints] = useState([])
+  const [lastUpdated, setLastUpdated] = useState('')
 
   const provider = new ethers.JsonRpcProvider(
     NETWORK.rpcUrls[0],
@@ -63,9 +66,10 @@ export default function App() {
             provider
           )
 
-          const [name, symbol] = await Promise.all([
+          const [name, symbol, supply] = await Promise.all([
             token.name(),
-            token.symbol()
+            token.symbol(),
+            token.totalSupply()
           ])
 
           let logo = ''
@@ -73,14 +77,21 @@ export default function App() {
             logo = await readContract.tokenLogoURI(address)
           } catch {}
 
+          const price = Number(ethers.formatUnits(data[2], 18))
+          const volume = Number(ethers.formatEther(data[5]))
+          const reserve = Number(ethers.formatEther(data[4]))
+          const supplyNumber = Number(ethers.formatUnits(supply, 18))
+
           return {
             address,
             name,
             symbol,
             logo,
-            price: ethers.formatUnits(data[2], 18),
-            volume: ethers.formatEther(data[5]),
-            reserve: ethers.formatEther(data[4]),
+            price,
+            volume,
+            reserve,
+            supply: supplyNumber,
+            marketCap: price * supplyNumber,
             fee: Number(data[6]) / 100
           }
         })
@@ -102,6 +113,47 @@ export default function App() {
   useEffect(() => {
     loadMarket()
   }, [])
+
+  const selectedToken = tokens.find(
+    token => token.address.toLowerCase() === tokenAddress.toLowerCase()
+  )
+
+  // Sample the live contract price while this Trade page is open.
+  useEffect(() => {
+    if (active !== 'Trade' || !ethers.isAddress(tokenAddress)) {
+      setChartPoints([])
+      return
+    }
+
+    let mounted = true
+
+    async function refreshPrice() {
+      try {
+        const data = await readContract.tokens(tokenAddress)
+        const price = Number(ethers.formatUnits(data[2], 18))
+
+        if (!mounted || !Number.isFinite(price)) return
+
+        setChartPoints(previous => {
+          const next = [
+            ...previous,
+            { time: Date.now(), price }
+          ]
+          return next.slice(-40)
+        })
+
+        setLastUpdated(new Date().toLocaleTimeString())
+      } catch {}
+    }
+
+    refreshPrice()
+    const timer = setInterval(refreshPrice, 15000)
+
+    return () => {
+      mounted = false
+      clearInterval(timer)
+    }
+  }, [active, tokenAddress])
 
   async function handleConnect() {
     try {
@@ -149,14 +201,10 @@ export default function App() {
       setError('')
       setMessage('')
 
-      if (!wallet) {
-        throw new Error('Connect your wallet first')
-      }
-
+      if (!wallet) throw new Error('Connect your wallet first')
       if (!ethers.isAddress(tokenAddress)) {
         throw new Error('Enter a valid token address')
       }
-
       if (!amount || Number(amount) <= 0) {
         throw new Error('Enter a valid amount')
       }
@@ -183,17 +231,15 @@ export default function App() {
           { value: ethAmount }
         )
 
-        setMessage('Buy transaction submitted. Waiting for confirmation...')
+        setMessage('Buy submitted. Waiting for confirmation...')
         await tx.wait()
         setMessage('Buy successful!')
       } else {
         const tokenAmount = ethers.parseUnits(amount, 18)
-
         const quotedETH = await contract.quoteSell(
           tokenAddress,
           tokenAmount
         )
-
         const minimumETH = quotedETH * 99n / 100n
 
         const token = new ethers.Contract(
@@ -208,7 +254,6 @@ export default function App() {
           CONTRACT_ADDRESS,
           tokenAmount
         )
-
         await approval.wait()
 
         setMessage('Approval confirmed. Confirm your sell transaction...')
@@ -219,7 +264,7 @@ export default function App() {
           minimumETH
         )
 
-        setMessage('Sell transaction submitted. Waiting for confirmation...')
+        setMessage('Sell submitted. Waiting for confirmation...')
         await tx.wait()
         setMessage('Sell successful!')
       }
@@ -239,6 +284,85 @@ export default function App() {
       .toLowerCase()
       .includes(search.toLowerCase())
   )
+
+  function PriceChart() {
+    const values = chartPoints.map(point => point.price)
+    const min = values.length ? Math.min(...values) : 0
+    const max = values.length ? Math.max(...values) : 1
+    const range = max - min || max * 0.01 || 1
+
+    const coordinates = chartPoints.map((point, index) => {
+      const x = chartPoints.length === 1
+        ? 50
+        : 8 + index * (84 / (chartPoints.length - 1))
+      const y = 88 - ((point.price - min) / range) * 72
+      return `${x},${y}`
+    }).join(' ')
+
+    return (
+      <div style={{
+        background: '#0b1220',
+        border: '1px solid #263143',
+        borderRadius: 14,
+        padding: 16,
+        marginTop: 18
+      }}>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 10,
+          flexWrap: 'wrap'
+        }}>
+          <strong>Price chart</strong>
+          <span style={{ color: '#8995a8', fontSize: 12 }}>
+            Live samples · 15 seconds
+          </span>
+        </div>
+
+        <svg
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+          style={{
+            width: '100%',
+            height: 190,
+            marginTop: 14,
+            display: 'block',
+            background: '#101a2a',
+            borderRadius: 8
+          }}
+        >
+          {[20, 40, 60, 80].map(y => (
+            <line
+              key={y}
+              x1="0" y1={y} x2="100" y2={y}
+              stroke="#263143"
+              strokeWidth="0.5"
+            />
+          ))}
+          {chartPoints.length > 1 && (
+            <polyline
+              points={coordinates}
+              fill="none"
+              stroke="#d7a94b"
+              strokeWidth="1.5"
+              vectorEffect="non-scaling-stroke"
+            />
+          )}
+        </svg>
+
+        {chartPoints.length < 2 && (
+          <p style={{ color: '#8995a8', fontSize: 13 }}>
+            Collecting price samples. Keep this page open to build the chart.
+          </p>
+        )}
+
+        <p style={{ color: '#8995a8', fontSize: 11, marginBottom: 0 }}>
+          Last refreshed: {lastUpdated || 'Waiting for data'}
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div className="app">
@@ -272,7 +396,6 @@ export default function App() {
       </nav>
 
       <main className="main">
-
         {active === 'Market' && (
           <>
             <h2>Token Market</h2>
@@ -299,7 +422,6 @@ export default function App() {
             </div>
 
             {loading && <p>Loading tokens...</p>}
-
             {filteredTokens.length === 0 && !loading && (
               <p>No launched tokens found.</p>
             )}
@@ -324,9 +446,9 @@ export default function App() {
                       style={{ width: 45, height: 45, borderRadius: '50%' }}
                     />
                   )}
-                  <p>Price: {Number(token.price).toFixed(8)} ETH</p>
-                  <p>Volume: {Number(token.volume).toFixed(4)} ETH</p>
-                  <p>Reserve: {Number(token.reserve).toFixed(4)} ETH</p>
+                  <p>Price: {token.price.toFixed(8)} ETH</p>
+                  <p>Volume: {token.volume.toFixed(4)} ETH</p>
+                  <p>Reserve: {token.reserve.toFixed(4)} ETH</p>
                   <p>Trading fee: {token.fee}%</p>
                   <p style={{ fontSize: 11, overflowWrap: 'anywhere' }}>
                     {token.address}
@@ -349,155 +471,345 @@ export default function App() {
 
         {active === 'Trade' && (
           <>
-            <h2>Trade Tokens</h2>
-            <p>Buy and sell tokens using the GIWA bonding curve.</p>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: 12,
+              flexWrap: 'wrap'
+            }}>
+              <div>
+                <h2 style={{ marginBottom: 5 }}>Trade</h2>
+                <p style={{ marginTop: 0 }}>
+                  GIWA bonding-curve trading
+                </p>
+              </div>
+              <button className="wallet" onClick={loadMarket}>
+                Refresh data
+              </button>
+            </div>
 
             <div style={{
-              maxWidth: 480,
-              marginTop: 25,
-              padding: 22,
-              background: '#111827',
-              border: '1px solid #263143',
-              borderRadius: 14
+              display: 'flex',
+              gap: 10,
+              flexWrap: 'wrap',
+              margin: '18px 0'
             }}>
-              <div style={{ display: 'flex', gap: 10, marginBottom: 22 }}>
-                <button
-                  className="wallet"
-                  style={{
-                    flex: 1,
-                    background: tradeType === 'buy' ? '#d7a94b' : '#263143',
-                    color: tradeType === 'buy' ? '#080b12' : 'white'
-                  }}
-                  onClick={() => {
-                    setTradeType('buy')
-                    setQuote('')
-                    setError('')
-                    setMessage('')
-                  }}
-                >
-                  Buy
-                </button>
-
-                <button
-                  className="wallet"
-                  style={{
-                    flex: 1,
-                    background: tradeType === 'sell' ? '#d7a94b' : '#263143',
-                    color: tradeType === 'sell' ? '#080b12' : 'white'
-                  }}
-                  onClick={() => {
-                    setTradeType('sell')
-                    setQuote('')
-                    setError('')
-                    setMessage('')
-                  }}
-                >
-                  Sell
-                </button>
-              </div>
-
-              <label>Choose launched token</label>
               <select
                 value={tokenAddress}
                 onChange={e => {
                   setTokenAddress(e.target.value)
                   setQuote('')
+                  setChartPoints([])
                 }}
                 style={{
-                  width: '100%',
+                  flex: 1,
+                  minWidth: 200,
                   padding: 13,
-                  margin: '9px 0 18px',
                   borderRadius: 8,
-                  background: '#080b12',
+                  background: '#111827',
                   color: 'white',
                   border: '1px solid #263143'
                 }}
               >
-                <option value="">Select a token</option>
+                <option value="">Select a launched token</option>
                 {tokens.map(token => (
                   <option key={token.address} value={token.address}>
                     {token.name} ({token.symbol})
                   </option>
                 ))}
               </select>
-
-              <label>Token contract address</label>
-              <input
-                value={tokenAddress}
-                onChange={e => {
-                  setTokenAddress(e.target.value)
-                  setQuote('')
-                }}
-                placeholder="0x..."
-                style={{
-                  width: '100%',
-                  padding: 13,
-                  margin: '9px 0 18px',
-                  borderRadius: 8,
-                  background: '#080b12',
-                  color: 'white',
-                  border: '1px solid #263143'
-                }}
-              />
-
-              <label>
-                {tradeType === 'buy' ? 'ETH amount to spend' : 'Token amount to sell'}
-              </label>
-
-              <input
-                type="number"
-                min="0"
-                step="any"
-                value={amount}
-                onChange={e => {
-                  setAmount(e.target.value)
-                  setQuote('')
-                }}
-                placeholder={tradeType === 'buy' ? '0.1 ETH' : '1000 tokens'}
-                style={{
-                  width: '100%',
-                  padding: 13,
-                  margin: '9px 0 18px',
-                  borderRadius: 8,
-                  background: '#080b12',
-                  color: 'white',
-                  border: '1px solid #263143'
-                }}
-              />
-
-              <button
-                className="wallet"
-                style={{ width: '100%', marginBottom: 12 }}
-                onClick={getQuote}
-                disabled={loading}
-              >
-                Get Quote
-              </button>
-
-              {quote && (
-                <p style={{ color: '#d7a94b', margin: '12px 0' }}>
-                  Estimated output: {quote}
-                </p>
-              )}
-
-              <button
-                className="wallet"
-                style={{ width: '100%' }}
-                onClick={executeTrade}
-                disabled={loading}
-              >
-                {loading
-                  ? 'Processing...'
-                  : tradeType === 'buy'
-                    ? 'Buy Token'
-                    : 'Approve & Sell'}
-              </button>
-
-              <p style={{ fontSize: 12, color: '#aab3c2', marginTop: 15 }}>
-                Estimated 1% slippage protection is applied to transactions.
-                Network gas fees are separate.
-              </p>
             </div>
+
+            {selectedToken ? (
+              <>
+                <div style={{
+                  background: '#111827',
+                  border: '1px solid #263143',
+                  borderRadius: 14,
+                  padding: 20
+                }}>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 13
+                  }}>
+                    {selectedToken.logo ? (
+                      <img
+                        src={selectedToken.logo}
+                        alt=""
+                        style={{
+                          width: 52,
+                          height: 52,
+                          borderRadius: '50%',
+                          objectFit: 'cover'
+                        }}
+                      />
+                    ) : (
+                      <div style={{
+                        width: 52,
+                        height: 52,
+                        borderRadius: '50%',
+                        background: '#263143',
+                        display: 'grid',
+                        placeItems: 'center',
+                        fontSize: 22
+                      }}>
+                        ◈
+                      </div>
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <h2 style={{ margin: 0 }}>
+                        {selectedToken.name}
+                      </h2>
+                      <span style={{ color: '#9aa6b8' }}>
+                        {selectedToken.symbol}
+                      </span>
+                    </div>
+                    <span style={{
+                      color: '#55d6a1',
+                      fontSize: 12
+                    }}>
+                      ● On-chain
+                    </span>
+                  </div>
+
+                  <div style={{ marginTop: 22 }}>
+                    <span style={{ color: '#9aa6b8', fontSize: 13 }}>
+                      Current token price
+                    </span>
+                    <h1 style={{
+                      fontSize: 30,
+                      margin: '5px 0',
+                      color: '#d7a94b',
+                      overflowWrap: 'anywhere'
+                    }}>
+                      {selectedToken.price.toFixed(10)} ETH
+                    </h1>
+                  </div>
+
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit,minmax(135px,1fr))',
+                    gap: 10,
+                    marginTop: 20
+                  }}>
+                    {[
+                      ['Market cap', selectedToken.marketCap.toFixed(6) + ' ETH'],
+                      ['Total volume', selectedToken.volume.toFixed(6) + ' ETH'],
+                      ['ETH reserve', selectedToken.reserve.toFixed(6) + ' ETH'],
+                      ['Total supply', selectedToken.supply.toLocaleString()],
+                      ['Trading fee', selectedToken.fee + '%'],
+                      ['Price currency', 'ETH']
+                    ].map(([label, value]) => (
+                      <div key={label} style={{
+                        background: '#0b1220',
+                        padding: 13,
+                        borderRadius: 9,
+                        border: '1px solid #263143',
+                        minWidth: 0
+                      }}>
+                        <div style={{
+                          color: '#8995a8',
+                          fontSize: 12,
+                          marginBottom: 7
+                        }}>
+                          {label}
+                        </div>
+                        <strong style={{
+                          fontSize: 14,
+                          overflowWrap: 'anywhere'
+                        }}>
+                          {value}
+                        </strong>
+                      </div>
+                    ))}
+                  </div>
+
+                  <PriceChart />
+
+                  <div style={{
+                    marginTop: 15,
+                    padding: 13,
+                    background: '#0b1220',
+                    borderRadius: 9
+                  }}>
+                    <div style={{ color: '#8995a8', fontSize: 12 }}>
+                      Token contract
+                    </div>
+                    <div style={{
+                      fontSize: 12,
+                      overflowWrap: 'anywhere',
+                      marginTop: 6
+                    }}>
+                      {selectedToken.address}
+                    </div>
+                    <a
+                      href={`${NETWORK.blockExplorerUrls[0]}/address/${selectedToken.address}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{
+                        color: '#d7a94b',
+                        display: 'inline-block',
+                        marginTop: 10,
+                        fontSize: 13
+                      }}
+                    >
+                      View on GIWA Explorer ↗
+                    </a>
+                  </div>
+                </div>
+
+                <div style={{
+                  maxWidth: 600,
+                  margin: '20px auto',
+                  padding: 22,
+                  background: '#111827',
+                  border: '1px solid #263143',
+                  borderRadius: 14
+                }}>
+                  <h2 style={{ marginTop: 0 }}>Swap</h2>
+
+                  <div style={{
+                    display: 'flex',
+                    gap: 10,
+                    marginBottom: 22
+                  }}>
+                    {['buy', 'sell'].map(type => (
+                      <button
+                        key={type}
+                        className="wallet"
+                        style={{
+                          flex: 1,
+                          background: tradeType === type ? '#d7a94b' : '#263143',
+                          color: tradeType === type ? '#080b12' : 'white'
+                        }}
+                        onClick={() => {
+                          setTradeType(type)
+                          setQuote('')
+                          setError('')
+                          setMessage('')
+                        }}
+                      >
+                        {type === 'buy' ? 'Buy' : 'Sell'}
+                      </button>
+                    ))}
+                  </div>
+
+                  <label>
+                    {tradeType === 'buy'
+                      ? 'You pay · ETH'
+                      : `You sell · ${selectedToken.symbol}`}
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={amount}
+                    onChange={e => {
+                      setAmount(e.target.value)
+                      setQuote('')
+                    }}
+                    placeholder={tradeType === 'buy' ? '0.1 ETH' : '1000 tokens'}
+                    style={{
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      padding: 15,
+                      margin: '9px 0 18px',
+                      borderRadius: 8,
+                      background: '#080b12',
+                      color: 'white',
+                      border: '1px solid #263143',
+                      fontSize: 16
+                    }}
+                  />
+
+                  <button
+                    className="wallet"
+                    style={{ width: '100%', marginBottom: 12 }}
+                    onClick={getQuote}
+                    disabled={loading}
+                  >
+                    Get Quote
+                  </button>
+
+                  {quote && (
+                    <div style={{
+                      background: '#0b1220',
+                      padding: 14,
+                      borderRadius: 8,
+                      marginBottom: 14
+                    }}>
+                      <span style={{ color: '#9aa6b8', fontSize: 12 }}>
+                        Estimated output
+                      </span>
+                      <h3 style={{
+                        color: '#d7a94b',
+                        margin: '7px 0',
+                        overflowWrap: 'anywhere'
+                      }}>
+                        {quote}
+                      </h3>
+                    </div>
+                  )}
+
+                  <button
+                    className="wallet"
+                    style={{ width: '100%' }}
+                    onClick={executeTrade}
+                    disabled={loading}
+                  >
+                    {loading
+                      ? 'Processing...'
+                      : !wallet
+                        ? 'Connect wallet to trade'
+                        : tradeType === 'buy'
+                          ? 'Buy ' + selectedToken.symbol
+                          : 'Approve & Sell'}
+                  </button>
+
+                  <p style={{
+                    fontSize: 12,
+                    color: '#aab3c2',
+                    marginTop: 15
+                  }}>
+                    1% slippage protection is applied. Network gas fees are separate.
+                  </p>
+                </div>
+
+                <div style={{
+                  background: '#111827',
+                  border: '1px solid #263143',
+                  borderRadius: 12,
+                  padding: 18,
+                  marginTop: 18
+                }}>
+                  <h3 style={{ marginTop: 0 }}>Recent trades</h3>
+                  <p style={{
+                    color: '#9aa6b8',
+                    fontSize: 13,
+                    lineHeight: 1.6
+                  }}>
+                    Trade history will appear here once the contract's
+                    buy and sell event definitions are added. No trade
+                    records are fabricated.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <div style={{
+                padding: 35,
+                textAlign: 'center',
+                background: '#111827',
+                border: '1px solid #263143',
+                borderRadius: 14
+              }}>
+                <h3>Select a token to start trading</h3>
+                <p style={{ color: '#9aa6b8' }}>
+                  Choose a launched token from the list above.
+                </p>
+              </div>
+            )}
           </>
         )}
 
