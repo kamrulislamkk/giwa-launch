@@ -28,7 +28,7 @@ export const ABI = [
   'function sell(address,uint256,uint256) payable',
   'function quoteBuy(address,uint256) view returns (uint256)',
   'function quoteSell(address,uint256) view returns (uint256)',
-]
+  'event Trade(address indexed token,address indexed trader,bool isBuy,uint256 ethAmount,uint256 tokenAmount,uint256 fee,uint256 newPrice)'],
 
 export async function connectWallet() {
   if (!window.ethereum) {
